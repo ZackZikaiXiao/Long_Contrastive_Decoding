@@ -1,0 +1,12 @@
+benchmark/super_retrieval/data
+benchmark/super_retrieval/results
+benchmark/RULER/llama-3-8B-262k
+benchmark/RULER/llama-3-8B-262k-方案一
+benchmark/RULER/llama-3-8B-262k-official
+benchmark/LongBench/data
+benchmark/LongBench/pred
+benchmark/LongBench/pred_e
+benchmark/LEval
+benchmark/super_retrieval/kv-retrieval-3000_keys.jsonl
+motivation/data_32k
+motivation/data
