@@ -90,6 +90,7 @@ def mean_reciprocal_rank(ranks):
     """
     # Calculate the reciprocal rank for each query
     reciprocal_ranks = [1.0 / rank for rank in ranks]
+    # reciprocal_ranks = [rank for rank in ranks]
     
     # Calculate the mean of the reciprocal ranks
     mrr = sum(reciprocal_ranks) / len(ranks)
@@ -124,7 +125,8 @@ for file_id in range(len(datasets_path)):
                     break
             mrr_ranks.append(prob_id+1)
             break
-        
+    # Removing all zero values from the list
+    mrr_ranks = [value for value in mrr_ranks if value != 1]
     mrr = mean_reciprocal_rank(mrr_ranks)
     file_name = os.path.splitext(os.path.basename(dataset_path))[0]
     draw_mrrs.append(mrr)

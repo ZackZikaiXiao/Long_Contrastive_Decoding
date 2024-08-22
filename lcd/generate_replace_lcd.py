@@ -290,7 +290,7 @@ GenerateOutput = Union[GenerateNonBeamOutput, GenerateBeamOutput]
 #                             return_dict=True,
 #                             output_attentions=output_attentions,
 #                             output_hidden_states=output_hidden_states,
-#                             update_past_key_values=True
+#                             lcd_enable=True
 #                         )
 #                     # 裁剪kv cache
 #                     model_inputs['past_key_values'].crop(model_inputs['attention_mask'].shape[1]-1)
@@ -543,6 +543,7 @@ def _sample(
             if calibration_enable:
                                 # prepare model
                 # if not first_iteration:
+                # Step 1:
                 if prefilling_stage:
                     if input_ids.shape[1] == 1:
                         raise ValueError("input_ids 只有一个元素，无法执行操作。")
@@ -572,15 +573,18 @@ def _sample(
                 
                 self.logits_chunks = []
 
-                # permu_num = [1, 10, 100, 1000, 10000, 100000]
+                # permu_num = [10, 100, 1000]
                 permu_num = [100] * 1
+                
+                # Step 2:
                 # 2. 处理每个块
                 model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
                 for num in permu_num:
                     # 在position_ids上添加扰动
-                    # model_inputs['position_ids'] += torch.randint(num, 10 * num, model_inputs['position_ids'].shape, device=model_inputs['position_ids'].device)
-                    # model_inputs['position_ids'].clamp_(min=0)
+                    model_inputs['position_ids'] += torch.randint(num, 10 * num, model_inputs['position_ids'].shape, device=model_inputs['position_ids'].device)
+                    model_inputs['position_ids'].clamp_(min=0)
                     # model_inputs['position_ids'].fill_(1)   # 1048576
+                    # model_inputs["attention_mask"][0, 0:4] = 0.0
                     if synced_gpus and this_peer_finished: 
                         continue  # don't waste resources running the code we don't need
                     with torch.no_grad():
@@ -589,7 +593,7 @@ def _sample(
                             return_dict=True,
                             output_attentions=output_attentions,
                             output_hidden_states=output_hidden_states,
-                            update_past_key_values=True
+                            lcd_enable=False
                         )
                     # 裁剪kv cache
                     model_inputs['past_key_values'].crop(model_inputs['attention_mask'].shape[1]-1)
@@ -601,7 +605,8 @@ def _sample(
                     next_token_logits = outputs_chunk.logits[:, -1, :].clone()
                     self.logits_chunks.append(next_token_logits)
                     del outputs_chunk
-                    
+                
+                # Step 3:
                 # 3. formal next token predict
                 model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
                 model_inputs["attention_mask"][0].fill_(1)

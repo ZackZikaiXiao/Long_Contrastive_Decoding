@@ -1,21 +1,19 @@
 # from transformers import LlamaForCausalLM, LlamaTokenizer
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
+from transformers import LlamaForCausalLM, AutoTokenizer
+
 import numpy as np
 from torch import nn
 from pathlib import Path
 from tqdm import tqdm
 import random
 import json
+import torch
 import os
-import sys
-
-module_path = "/home/zikaixiao/zikaixiao/LongLoRA-main"
-if module_path not in sys.path:
-    sys.path.append(module_path)
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 from lcd.modeling_llama_lcd import LlamaForCausalLM
+
 from lcd.generate_replace_lcd import generate_replace
-generate_replace()
+generate_replace() 
 
 from transformers import AutoConfig
 
@@ -33,7 +31,7 @@ enable_MsPoE = False
 DATA_NAME_TO_MAX_NEW_TOKENS = {
     "kv_retrieval": 100,   
     "math_calc": 2048,
-    "variable_tracking": 300    # 100
+    "variable_tracking": 100    # 100
 }
 
 if input_len == "4k":
@@ -56,8 +54,8 @@ DATA_NAME_TO_DATA_SELECTION = {
 MODEL_TO_PROMPT_TEMPLATE = {
     "kv_retrieval": "Given the JSON object below, extract and return only the value corresponding to the specified key.\n\n{context}\n\n{input}. Return only the value and do not include any additional text in your response:",  # noqa
     "math_calc": "Calculate the numerical expression and provide intermediate results only, for example, for the expression 1 + 3 + 10 - 8, output 4, 14, 6 without displaying the steps.\n\nCalculate the value of the expression below: \n\n{context}\n\nDo not copy the first number; instead, start outputting from the result of the operation between the first two numbers.{input}",
-    "variable_tracking": """\n\n{context} Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
-    # "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
+    # "variable_tracking": """\n\n{context} Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
+    "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
 }
 
 def ensure_directory_exists(path):
@@ -121,32 +119,18 @@ def get_answer(eg: dict, data_name: str):
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
 config = AutoConfig.from_pretrained(model_path)
+
 device = torch.device('cuda')
 tokenizer.padding_side = "left"
 
-if enable_MsPoE:
-    import sys
-    module_path = '/home/zikaixiao/zikaixiao/LongLoRA-main'
-    if module_path not in sys.path:
-        sys.path.append(module_path)
-    from attention.modeling_llama_MsPoE import MsPoELlamaForCausalLM
-    from transformers import AutoConfig
-    
-    config = AutoConfig.from_pretrained(model_path)
-    print('Using Ms-PoE Positional Embedding')
-    config.apply_layers = list(int(x) for x in "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31".split(','))
-    config.compress_ratio_min = 1.2
-    config.compress_ratio_max = 1.8
-    config.head_type = "normal"
-    config._attn_implementation = "flash_attention_2"
-    model = MsPoELlamaForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16, device_map='auto')
-else:
-    model = LlamaForCausalLM.from_pretrained(model_path,
-                                        config=config,
-                                        torch_dtype=torch.bfloat16,   
-                                        attn_implementation="flash_attention_2",
-                                        device_map='auto')
 
+
+model = LlamaForCausalLM.from_pretrained(model_path,
+                                    config=config,
+                                    torch_dtype=torch.bfloat16,   
+                                    attn_implementation="flash_attention_2",    # flash_attention_2
+                                    device_map='auto'
+                                    )
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 # DEFAULT_EOS_TOKEN = "</s>"
@@ -182,7 +166,7 @@ def generate(model, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_toke
     generated_texts = []
     response = outputs[0][input_ids.shape[-1]:]
     generated_texts = tokenizer.decode(response, skip_special_tokens=True)
-    print(generated_texts)
+    # print(generated_texts)
 
     # for i, output in enumerate(outputs):
     #     text = tokenizer.decode(output)
@@ -191,6 +175,16 @@ def generate(model, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_toke
     #     answer = text[prompt_length:]
     #     generated_texts.append(answer)
 
+    # # 这里展示最后一层的注意力权重
+    # from captum.attr import visualization as viz
+    # # 获取注意力权重
+    # with torch.no_grad():
+    #     outputs = model(input_ids, output_attentions = True)
+    #     attentions = outputs.attentions  # attentions 是一个包含所有层的注意力权重的列
+    # attention_weights = attentions[-1][0].detach().cpu().numpy()
+    # tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+    # fig = viz.visualize_attention(tokens, attention_weights)
+    # fig.savefig('attention_visualization.png')
     return generated_texts
 
 def iter_jsonl(fname, cnt=None):
@@ -237,8 +231,7 @@ for i in range(len(datasets_name)):
     dataset_name = datasets_name[i]
     dataset_path = datasets_path[i]
     model_name = os.path.basename(model_path)
-    # output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}.jsonl")   
-    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_ours_init_token.jsonl")   
+    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_recalling_context.jsonl")   
     if enable_MsPoE:
         output_path = os.path.join(base_path, "results", model_name + "_MsPoE", f"preds_{dataset_name}_{input_len}.jsonl")   
     directory = os.path.dirname(output_path)
@@ -249,11 +242,17 @@ for i in range(len(datasets_name)):
     dataset = load_data(dataset_path, data_dir="")
     random.seed(42)
     random.shuffle(dataset)
-    dataset = dataset[0:DATA_NAME_TO_DATA_SELECTION[dataset_name]]
+    # dataset = dataset[0:DATA_NAME_TO_DATA_SELECTION[dataset_name]]
+    indices = [333-1, 415-1, 215-1]
+    indices = [333-1]
+    # indices = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    # indices = [303-1]
+    # indices = [5-1]
+    dataset = [dataset[i] for i in indices]
+    
     predicts = []
-
-    print(f"Processing dataset: {dataset_name}")
-    for eg in tqdm(dataset, desc=f"Processing {dataset_name}"):
+    for eg in dataset:
+    # for eg in tqdm(dataset, desc=f"Processing {dataset_name}"):
         # Assuming item is a dictionary and we need to extract some key value, e.g., item["input"]
         prompts =  create_prompt(eg, dataset_name, MODEL_TO_PROMPT_TEMPLATE)
         input_text = truncate_by_tokens(prompts, tokenizer, TRUNCATE_LEN)
@@ -272,33 +271,40 @@ for i in range(len(datasets_name)):
                 {"role": "assistant", "content": "[3, -1, -11]"},
                 {"role": "user", "content": input_text}]
 
+        # 需要删除的字符串
+        # string_to_remove = 'ffeae470-29ae-4a8c-9c56-9b97d9edf8ac'
+        # # 找到并删除字符串
+        # if string_to_remove in messages[0]['content']:
+        #     messages[0]['content'] = messages[0]['content'].replace(string_to_remove, '')
+        
+        def remove_string_with_context(messages, string_to_remove, k):
+            content = messages[0]['content']
+            index = content.find(string_to_remove)
+            
+            if index != -1:
+                start = max(0, index - k)
+                end = min(len(content), index + len(string_to_remove) + k)
+                messages[0]['content'] = content[:start] + content[end:]
+            return messages
+        
+        # 找到子串的位置
+        def find_sublist_positions(lst, sublist):
+            positions = []
+            sublist_len = len(sublist)
+            for i in range(len(lst) - sublist_len + 1):
+                if lst[i:i + sublist_len] == sublist:
+                    positions.append(i)
+            return positions
+
+        # # 示例用法
+        # string_to_remove = 'ffeae470-29ae-4a8c-9c56-9b97d9edf8ac'
+        # k = 300  # 指定前后各删除的字符数
+        # messages = remove_string_with_context(messages, string_to_remove, k)
+        
+        
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model.device)
-
-
+        # input_ids = input_ids.repeat(2, 1)
         # Assuming generate is a function defined elsewhere
         pred = generate(model, tokenizer, input_ids, temperature=0.01, top_p=0.95, max_new_tokens=max_new_tokens)
-
-        if dataset_name == "kv_retrieval":
-            preds.append(
-            {
-                "id": eg["id"],
-                "ans_id": eg["ans_id"],
-                "prediction": pred,
-                "ground_truth": get_answer(eg, dataset_name),
-            })
-        elif dataset_name == "variable_tracking":
-            preds.append(
-            {
-                "prediction": pred,
-                "ground_truth": eg['output'],
-            })
-        elif dataset_name == "math_calc":
-            preds.append(
-            {
-                "prediction": pred,
-                "ground_truth": get_answer(eg, dataset_name),
-            })
-        dump_jsonl(preds, output_path)
-
-
-
+        print("label", eg['answer'])
+        print("pred", pred)

@@ -400,7 +400,7 @@ class LlamaFlashAttention2(LlamaAttention):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
-        update_past_key_values: Optional[bool] = None,  # new modified
+        lcd_enable: Optional[bool] = None,  # new modified
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if isinstance(past_key_value, StaticCache):
             raise ValueError(
@@ -424,7 +424,7 @@ class LlamaFlashAttention2(LlamaAttention):
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids)
-        if update_past_key_values:
+        if lcd_enable:
             
             # 方案一
             # 指定要修改的范围
@@ -726,7 +726,7 @@ class LlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        update_past_key_values: Optional[bool] = None,  # new modified
+        lcd_enable: Optional[bool] = None,  # new modified
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
@@ -761,7 +761,7 @@ class LlamaDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
             cache_position=cache_position,
-            update_past_key_values=update_past_key_values,
+            lcd_enable=lcd_enable,
         )
         hidden_states = residual + hidden_states
 
@@ -947,7 +947,7 @@ class LlamaModel(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        update_past_key_values: Optional[bool] = None,  # new modified
+        lcd_enable: Optional[bool] = None,  # new modified
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1013,7 +1013,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     output_attentions,
                     use_cache,
                     cache_position,
-                    update_past_key_values,
+                    lcd_enable,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -1024,7 +1024,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     cache_position=cache_position,
-                    update_past_key_values=update_past_key_values,
+                    lcd_enable=lcd_enable,
                 )
 
             hidden_states = layer_outputs[0]
@@ -1180,7 +1180,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        update_past_key_values: Optional[bool] = False,  # 添加新参数
+        lcd_enable: Optional[bool] = False,  # 添加新参数
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1225,7 +1225,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
-            update_past_key_values=update_past_key_values,
+            lcd_enable=lcd_enable,
         )
 
         hidden_states = outputs[0]
