@@ -95,8 +95,8 @@ if __name__ == "__main__":
                            number_of_sample = 100,
                            number_of_noise= nnoise_list[i], 
                            length=lengths_list[i], 
-                           source_file="./benchmark/super_retrieval/kv-retrieval-3000_keys.jsonl", 
-                           save_dir="./motivation/data"
+                           source_file=args.source_file, 
+                           save_dir=args.save_dir
                            )
 
     for i in range(len(log_lengths_list)):    
