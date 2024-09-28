@@ -22,7 +22,8 @@ parser = argparse.ArgumentParser(description='Generate probs')
 
 # 设置默认的 model_path 和 data_path
 parser.add_argument('--model_path', type=str, default='/home/zikaixiao/zikaixiao/LongLoRA-main/models/llama-3-8B-262k', help='Path to the model directory')
-parser.add_argument('--data_path', type=str, default='./motivation/data_32k/', help='Path to the data directory')
+parser.add_argument('--data_path', type=str, default='./motivation/data_32k', help='Path to the data directory')
+
 
 args = parser.parse_args()
     
@@ -107,7 +108,7 @@ for filename in os.listdir(data_path):
 
 datasets_path = sorted(datasets_path, key=lambda x: int(re.search(r'(\d+)_pred\.jsonl$', x).group(1)))
 
-ignore_punctuations = ['\"', ' ', ':']
+ignore_punctuations = ["\"", ' ', ':', "\\", "\\\""]
 
 draw_mrrs = []
 draw_file_names = []
@@ -121,7 +122,9 @@ for file_id in range(len(datasets_path)):
             if tokenizer.decode(eg["logits"][token_id][0][0]) in ignore_punctuations:
                 continue
             for prob_id in range(len(eg["logits"][token_id][0])):
-                if tokenizer.decode(eg["logits"][token_id][0][prob_id]) in eg["answer"]:
+                decoded_token = tokenizer.decode(eg["logits"][token_id][0][prob_id])
+                if eg["answer"].startswith(decoded_token):
+                # if tokenizer.decode(eg["logits"][token_id][0][prob_id]) in eg["answer"]:
                     break
             mrr_ranks.append(prob_id+1)
             break
@@ -152,8 +155,8 @@ plt.ylabel('Mean Reciprocal Rank (MRR)')
 plt.title('Length-Induced Ranking Degradation')
 plt.grid(True)
 
-# 保存为 PDF
-plt.savefig('mrr_vs_log_length.pdf', format='pdf')
+# 保存为 PD
+plt.savefig(data_path + '/mrr_vs_log_length.pdf', format='pdf')
 
 # 显示图表
 plt.show()

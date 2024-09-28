@@ -12,7 +12,7 @@ import os
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 from lcd.modeling_llama_lcd import LlamaForCausalLM
 
-from lcd.generate_replace_lcd import generate_replace
+from lcd.generate_replace_lcd_recent import generate_replace
 generate_replace() 
 
 from transformers import AutoConfig
@@ -244,7 +244,8 @@ for i in range(len(datasets_name)):
     random.shuffle(dataset)
     # dataset = dataset[0:DATA_NAME_TO_DATA_SELECTION[dataset_name]]
     indices = [333-1, 415-1, 215-1]
-    indices = [333-1]
+    indices = [333-1]   
+    indices = [21-1] 
     # indices = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
     # indices = [303-1]
     # indices = [5-1]

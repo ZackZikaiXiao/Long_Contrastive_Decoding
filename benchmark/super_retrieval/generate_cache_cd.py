@@ -14,16 +14,16 @@ module_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding"
 if module_path not in sys.path:
     sys.path.append(module_path)
 from lcd.cache.modeling_llama_lcd import LlamaForCausalLM
-from lcd.generate_replace_lcd_rag import generate_replace
+from lcd.generate_replace_cache_cd  import generate_replace
 # from lcd.rag import rank_documents_by_similarity, split_text_into_segments
 from lcd.rag import *
 generate_replace()
 
 from transformers import AutoConfig
 
-model_path = "/home/zikaixiao/zikaixiao/LongLoRA-main/models/llama-3.1-8B-128k"  # 替换为你的Llama模型路径 MicroLlama  llama2-7B-4k  Llama-3-8B-Instruct-262k
+model_path = "/home/zikaixiao/zikaixiao/LongLoRA-main/models/llama-3-8B-262k"  # 替换为你的Llama模型路径 MicroLlama  llama2-7B-4k  Llama-3-8B-Instruct-262k
 base_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding/benchmark/super_retrieval"
-input_len = "32k"
+input_len = "16k"
 # datasets_name = ["kv_retrieval", "math_calc", "variable_tracking"]
 # datasets_name = ["math_calc", "variable_tracking"]
 # datasets_name = ["variable_tracking"]
@@ -163,7 +163,7 @@ if enable_MsPoE:
     config._attn_implementation = "flash_attention_2"
     model = MsPoELlamaForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16, device_map='auto')
 else:
-    model = AutoModelForCausalLM.from_pretrained(model_path,
+    model = LlamaForCausalLM.from_pretrained(model_path,
                                         config=config,
                                         torch_dtype=torch.bfloat16,   
                                         attn_implementation="flash_attention_2",
@@ -198,8 +198,7 @@ def generate(model, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_toke
         do_sample = False,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=terminators,  # 设置terminators
-        use_cache=True,
-        cache_implementation= "offloaded"
+        use_cache=True
     )
 
     generated_texts = []
@@ -260,7 +259,7 @@ for i in range(len(datasets_name)):
     dataset_name = datasets_name[i]
     dataset_path = datasets_path[i]
     model_name = os.path.basename(model_path)
-    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_query_lcd.jsonl")   
+    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_cache_cd.jsonl")   
     # output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_cache_rag_dc_5percent.jsonl")   
     if enable_MsPoE:
         output_path = os.path.join(base_path, "results", model_name + "_MsPoE", f"preds_{dataset_name}_{input_len}.jsonl")   

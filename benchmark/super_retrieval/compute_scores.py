@@ -411,7 +411,7 @@ if __name__ == "__main__":
     for task in tasks:
         result_dir = Path(output_dir, model_name)
         preds_path = result_dir / f"preds_{task}_{length}.jsonl"
-        preds_path = "/home/zikaixiao/zikaixiao/LongLoRA-main/benchmark/super_retrieval/results/llama-3-8B-1048k/preds_variable_tracking_8k_ours_2.jsonl"
+        preds_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding/benchmark/super_retrieval/results/llama-3.1-8B-128k/preds_variable_tracking_32k_dola_low.jsonl"
         # if not preds_path.exists():
         #     print(f"Predictions not found in: {preds_path}")
         #     continue

@@ -13,17 +13,13 @@ import sys
 module_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding"
 if module_path not in sys.path:
     sys.path.append(module_path)
-from lcd.cache.modeling_llama_lcd import LlamaForCausalLM
-from lcd.generate_replace_lcd_rag import generate_replace
-# from lcd.rag import rank_documents_by_similarity, split_text_into_segments
-from lcd.rag import *
-generate_replace()
+from modeling_llama_3_1 import LlamaForCausalLM
 
 from transformers import AutoConfig
 
 model_path = "/home/zikaixiao/zikaixiao/LongLoRA-main/models/llama-3.1-8B-128k"  # 替换为你的Llama模型路径 MicroLlama  llama2-7B-4k  Llama-3-8B-Instruct-262k
 base_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding/benchmark/super_retrieval"
-input_len = "32k"
+input_len = "4k"
 # datasets_name = ["kv_retrieval", "math_calc", "variable_tracking"]
 # datasets_name = ["math_calc", "variable_tracking"]
 # datasets_name = ["variable_tracking"]
@@ -57,12 +53,6 @@ DATA_NAME_TO_DATA_SELECTION = {
 
 MODEL_TO_PROMPT_TEMPLATE = {
     "kv_retrieval": "Given the JSON object below, extract and return only the value corresponding to the specified key.\n\n{context}\n\n{input}. Return only the value and do not include any additional text in your response:",  # noqa
-    "math_calc": "Calculate the numerical expression and provide intermediate results only, for example, for the expression 1 + 3 + 10 - 8, output 4, 14, 6 without displaying the steps.\n\nCalculate the value of the expression below: \n\n{context}\n\nDo not copy the first number; instead, start outputting from the result of the operation between the first two numbers.{input}",
-    "variable_tracking": """\n\n{context} Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
-    # "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
-}
-MODEL_TO_QUERY_TEMPLATE = {
-    "kv_retrieval": "{input}",  # noqa
     "math_calc": "Calculate the numerical expression and provide intermediate results only, for example, for the expression 1 + 3 + 10 - 8, output 4, 14, 6 without displaying the steps.\n\nCalculate the value of the expression below: \n\n{context}\n\nDo not copy the first number; instead, start outputting from the result of the operation between the first two numbers.{input}",
     "variable_tracking": """\n\n{context} Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
     # "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
@@ -143,27 +133,10 @@ def get_answer(eg: dict, data_name: str):
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
 config = AutoConfig.from_pretrained(model_path)
-device = torch.device('cuda')
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 tokenizer.padding_side = "left"
 
-if enable_MsPoE:
-    import sys
-    module_path = '/home/zikaixiao/zikaixiao/LongLoRA-main'
-    if module_path not in sys.path:
-        sys.path.append(module_path)
-    from attention.modeling_llama_MsPoE import MsPoELlamaForCausalLM
-    from transformers import AutoConfig
-    
-    config = AutoConfig.from_pretrained(model_path)
-    print('Using Ms-PoE Positional Embedding')
-    config.apply_layers = list(int(x) for x in "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31".split(','))
-    config.compress_ratio_min = 1.2
-    config.compress_ratio_max = 1.8
-    config.head_type = "normal"
-    config._attn_implementation = "flash_attention_2"
-    model = MsPoELlamaForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16, device_map='auto')
-else:
-    model = AutoModelForCausalLM.from_pretrained(model_path,
+model = LlamaForCausalLM.from_pretrained(model_path,
                                         config=config,
                                         torch_dtype=torch.bfloat16,   
                                         attn_implementation="flash_attention_2",
@@ -198,8 +171,7 @@ def generate(model, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_toke
         do_sample = False,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=terminators,  # 设置terminators
-        use_cache=True,
-        cache_implementation= "offloaded"
+        use_cache=True
     )
 
     generated_texts = []
@@ -260,7 +232,7 @@ for i in range(len(datasets_name)):
     dataset_name = datasets_name[i]
     dataset_path = datasets_path[i]
     model_name = os.path.basename(model_path)
-    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_query_lcd.jsonl")   
+    output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_dola_high.jsonl")   
     # output_path = os.path.join(base_path, "results", model_name, f"preds_{dataset_name}_{input_len}_cache_rag_dc_5percent.jsonl")   
     if enable_MsPoE:
         output_path = os.path.join(base_path, "results", model_name + "_MsPoE", f"preds_{dataset_name}_{input_len}.jsonl")   
@@ -275,10 +247,11 @@ for i in range(len(datasets_name)):
     dataset = dataset[0:DATA_NAME_TO_DATA_SELECTION[dataset_name]]
     predicts = []
 
-    processor = TextProcessor(model_path='models/dragon-plus-context-encoder')  # jina; models/dragon-plus-context-encoder
-    positions_percentages = []
+
+
     print(f"Processing dataset: {dataset_name}")
     for eg in tqdm(dataset, desc=f"Processing {dataset_name}"):
+        eg = dataset[1]
         # Assuming item is a dictionary and we need to extract some key value, e.g., item["input"]
         prompts =  create_prompt(eg, dataset_name, MODEL_TO_PROMPT_TEMPLATE)
         input_text = truncate_by_tokens(prompts, tokenizer, TRUNCATE_LEN)
@@ -298,71 +271,13 @@ for i in range(len(datasets_name)):
                 {"role": "user", "content": input_text}]
 
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model.device)
-        # input_text = tokenizer.decode(input_ids[0])
+        input_ids = input_ids[:, ]
 
-        
-        # query =  create_query(eg, dataset_name, MODEL_TO_QUERY_TEMPLATE)
-        # query = "Given the JSON object below, extract and return only the value corresponding to the specified key. Return only the value and do not include any additional text in your response:"  # noqa
-        # model_path = 'models/dragon-plus-context-encoder'
-        # documents = processor.split_text_into_segments(input_text, max_segment_length=256)
-        # sorted_docs, sorted_scores = processor.rank_documents_by_similarity(query, documents, max_segment_length=256)
-        # torch.cuda.empty_cache()
-
-        # print("按照相似度排序的文档及对应分数:")
-        # for doc, score in zip(sorted_docs, sorted_scores):
-        #     print(f"{score:.4f} - {doc}")
-        # 遍历sorted_docs，检查eg["answer"]是否在每个文档中
-        # 初始化一个全为0的向量，长度和input_ids一致
-        # topk_vector = torch.zeros(input_ids.shape[1])
-
-        # # 计算前40%文档的数量
-        # num_docs_to_check = int(len(sorted_docs) * 0.05) # 30
-        # for i, doc in enumerate(sorted_docs[:num_docs_to_check]):  # 只遍历前40%的文档
-        #     start_char_index = input_text.find(doc)  # 找到文档在文本中的起始字符位置
-        #     if start_char_index == -1:
-        #         continue  # 如果没有找到，跳过这个文档
-
-        #     # 找到文档的结束字符位置
-        #     end_char_index = start_char_index + len(doc)
-
-        #     # 找到文档对应的起始和结束token索引
-        #     start_token_index = len(tokenizer.encode(input_text[:start_char_index], add_special_tokens=False))
-        #     end_token_index = len(tokenizer.encode(input_text[:end_char_index], add_special_tokens=False))
-
-        #     # 将对应位置的向量标记为1
-        #     topk_vector[start_token_index:end_token_index] = 1
-        
-        # query = query[0:int(len(query)/2)]
-        # query_start_char_index = input_text.find(query)
-        # if query_start_char_index != -1:
-        #     query_start_token_index = len(tokenizer.encode(input_text[:query_start_char_index], add_special_tokens=False))
-        #     # query_end_token_index = len(tokenizer.encode(input_text[:query_end_char_index], add_special_tokens=False))
-            
-        #     # 将对应的向量区域设置为0
-        #     topk_vector[query_start_token_index:] = 0
-        # torch.save(topk_vector, 'topk_vector.pt')
-
-        # found = False
-        # for i, doc in enumerate(sorted_docs):
-        #     if eg["answer"] in doc:
-        #         # 计算位置在总位置中的百分比
-        #         # print(f"eg['answer'] found in sorted_docs[{i}]")
-        #         position_percentage = (i + 1) / len(sorted_docs) * 100
-        #         positions_percentages.append(position_percentage)
-        #         found = True
-        #         break
-
-        # if not found:
-        #     # 如果没有找到，位置记为100%
-        #     # print(f"eg['answer'] not found in sorted_docs[{i}]")
-        #     positions_percentages.append(100.0)
-
-        # # 计算平均百分比
-        # average_percentage = sum(positions_percentages) / len(positions_percentages)
-        # print(f"所有位置[{positions_percentages}%]")
-        # print(f"平均百分比[{average_percentage}]")
-        
-        # continue
+        # 计算删除的起始和结束索引
+        start_idx = (input_ids.shape[1] - 0) // 2
+        end_idx = start_idx + 0
+        # 删除中间 500 个字符
+        input_ids = torch.cat((input_ids[:, :start_idx], input_ids[:, end_idx:]), dim=1)
 
         # Assuming generate is a function defined elsewhere
         pred = generate(model, tokenizer, input_ids, temperature=0.01, top_p=0.95, max_new_tokens=max_new_tokens)

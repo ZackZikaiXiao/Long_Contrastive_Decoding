@@ -10,3 +10,6 @@ benchmark/LEval
 benchmark/super_retrieval/kv-retrieval-3000_keys.jsonl
 motivation/data_32k
 motivation/data
+motivation/cause_of_distraction
+models
+motivation/kv_retrieval_noise_26008_wrong.jsonl

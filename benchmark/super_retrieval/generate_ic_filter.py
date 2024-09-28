@@ -10,14 +10,19 @@ import json
 import os
 import sys
 
+import deepspeed
+from transformers.deepspeed import HfDeepSpeedConfig
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # To avoid warnings about parallelism in tokenizers
+# distributed setup
+local_rank = int(os.getenv("LOCAL_RANK", "0"))
+world_size = int(os.getenv("WORLD_SIZE", "1"))
+torch.cuda.set_device(local_rank)
+deepspeed.init_distributed()
+
 module_path = "/home/zikaixiao/zikaixiao/Long_Contrastive_Decoding"
 if module_path not in sys.path:
     sys.path.append(module_path)
-from lcd.cache.modeling_llama_lcd import LlamaForCausalLM
-from lcd.generate_replace_lcd_rag import generate_replace
-# from lcd.rag import rank_documents_by_similarity, split_text_into_segments
 from lcd.rag import *
-generate_replace()
 
 from transformers import AutoConfig
 
@@ -62,7 +67,7 @@ MODEL_TO_PROMPT_TEMPLATE = {
     # "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
 }
 MODEL_TO_QUERY_TEMPLATE = {
-    "kv_retrieval": "{input}",  # noqa
+    "kv_retrieval": "Given the JSON object below, extract and return only the value corresponding to the specified key.{input}",  # noqa
     "math_calc": "Calculate the numerical expression and provide intermediate results only, for example, for the expression 1 + 3 + 10 - 8, output 4, 14, 6 without displaying the steps.\n\nCalculate the value of the expression below: \n\n{context}\n\nDo not copy the first number; instead, start outputting from the result of the operation between the first two numbers.{input}",
     "variable_tracking": """\n\n{context} Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
     # "variable_tracking": """\n\n{context} The key information has been labeled with "!!!!!!!!!!!". Your response should consist solely of listing all the variables in the specified format, such as 'AAA, BBB, CCC, DDD, EEE'; do not include any additional text in your response."""
@@ -163,13 +168,12 @@ if enable_MsPoE:
     config._attn_implementation = "flash_attention_2"
     model = MsPoELlamaForCausalLM.from_pretrained(model_path, config=config, torch_dtype=torch.bfloat16, device_map='auto')
 else:
-    model = AutoModelForCausalLM.from_pretrained(model_path,
+    model = LlamaForCausalLM.from_pretrained(model_path,
                                         config=config,
                                         torch_dtype=torch.bfloat16,   
                                         attn_implementation="flash_attention_2",
                                         device_map='auto')
-
-
+    
 DEFAULT_PAD_TOKEN = "[PAD]"
 # DEFAULT_EOS_TOKEN = "</s>"
 # DEFAULT_BOS_TOKEN = "<s>"
@@ -183,27 +187,77 @@ num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
 model.resize_token_embeddings(len(tokenizer))
 
 
-def generate(model, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_tokens=20):
+model_hidden_size = config.hidden_size
+
+# batch size has to be divisible by world_size, but can be bigger than world_size
+train_batch_size = 1 * world_size
+# DeepSpeed Inference setup
+ds_config = {
+    "fp16": {
+        "enabled": False
+    },
+    "bf16": {
+        "enabled": True
+    },
+    "zero_optimization": {
+        "stage": 3,
+        "offload_param": {
+            "device": "cpu",
+            "pin_memory": True
+        },
+        "overlap_comm": True,
+        "contiguous_gradients": True,
+        "reduce_bucket_size": model_hidden_size * model_hidden_size,
+        "stage3_prefetch_bucket_size": 0.9 * model_hidden_size * model_hidden_size,
+        "stage3_param_persistence_threshold": 1 * model_hidden_size
+    },
+    "activation_checkpointing": {
+        "partition_activations": True,
+        "contiguous_memory_optimization": True,
+        "cpu_checkpointing": True
+  },
+    "steps_per_print": 2000,
+    "train_batch_size": train_batch_size,
+    "train_micro_batch_size_per_gpu": 1,
+    "wall_clock_breakdown": False
+}
+
+
+dschf = HfDeepSpeedConfig(ds_config)
+ds_engine = deepspeed.initialize(model=model, config_params=ds_config)[0]
+ds_engine.module.eval()  # 设置模型为推理模式
+rank = torch.distributed.get_rank()
+if rank == 0:
+    text_in = "Is this review positive or negative? Review: this is the best cast iron skillet you will ever buy"
+elif rank == 1:
+    text_in = "Is this review positive or negative? Review: this is the worst restaurant ever"
+
+
+
+
+
+def generate(ds_engine, tokenizer, prompts, temperature=1.0, top_p=0.9, max_new_tokens=20):
     # inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
     # attention_mask = inputs["attention_mask"]
     terminators = [
         tokenizer.eos_token_id,
         tokenizer.convert_tokens_to_ids("<|eot_id|>"),
     ]
-    outputs = model.generate(
-        prompts,
-        temperature=temperature,
-        top_p=top_p,
-        max_new_tokens=max_new_tokens,
-        do_sample = False,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=terminators,  # 设置terminators
-        use_cache=True,
-        cache_implementation= "offloaded"
-    )
+    with torch.no_grad():
+        outputs = ds_engine.module.generate(  # 使用DeepSpeed的module
+                prompts,
+                temperature=temperature,
+                top_p=top_p,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                use_cache=True,
+                synced_gpus=True  # 启用多个GPU同步生成
+            )
 
     generated_texts = []
-    response = outputs[0][input_ids.shape[-1]:]
+    response = outputs[0][prompts.shape[-1]:]
     generated_texts = tokenizer.decode(response, skip_special_tokens=True)
     print(generated_texts)
 
@@ -251,6 +305,19 @@ def load_data(data_path: str, data_dir: str = "../data/InfiniteBench/"):
 
 datasets_path = [os.path.join(base_path, "data", dataset_name) + "_" + input_len + ".jsonl" for dataset_name in datasets_name]
 
+def ic_filtering(query, prompts, model, tokenizer):
+    processor = TextProcessor(model_path='models/dragon-plus-context-encoder')
+        # query = "Given the JSON object below, extract and return only the value corresponding to the specified key. Return only the value and do not include any additional text in your response:"  # noqa
+    documents_raw = processor.split_text_into_segments(prompts, max_segment_length=256)
+    documents_processed = []
+    for i in range(len(documents_raw)):
+        documents_raw[i] = "[CONTENT]: " + documents_raw[i] + query + "\n\n\nPlease copy useful content from [CONTENT] related to the [QUERY]without making any modifications："
+        # documents_raw[i] = "[CONTENT]: " + documents_raw[i] + query + "\n\n\nPlease copy useful content from [CONTENT] related to the [QUERY]without making any modifications："
+        messages  = [{'role': 'user', 'content': documents_raw[i]}]
+        input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model.device)
+        documents_processed.append(generate(model, tokenizer, input_ids, temperature=0.01, top_p=0.95, max_new_tokens=512))
+    return ''.join(documents_processed)
+
 
 
 for i in range(len(datasets_name)):
@@ -273,14 +340,18 @@ for i in range(len(datasets_name)):
     random.seed(42)
     random.shuffle(dataset)
     dataset = dataset[0:DATA_NAME_TO_DATA_SELECTION[dataset_name]]
-    predicts = []
 
-    processor = TextProcessor(model_path='models/dragon-plus-context-encoder')  # jina; models/dragon-plus-context-encoder
     positions_percentages = []
     print(f"Processing dataset: {dataset_name}")
     for eg in tqdm(dataset, desc=f"Processing {dataset_name}"):
         # Assuming item is a dictionary and we need to extract some key value, e.g., item["input"]
         prompts =  create_prompt(eg, dataset_name, MODEL_TO_PROMPT_TEMPLATE)
+
+
+        query =  "[QUERY: ]" + create_query(eg, dataset_name, MODEL_TO_QUERY_TEMPLATE)
+        # prompts = ic_filtering(query, prompts, model, tokenizer)
+
+
         input_text = truncate_by_tokens(prompts, tokenizer, TRUNCATE_LEN)
 
         if dataset_name == "kv_retrieval":
@@ -296,76 +367,15 @@ for i in range(len(datasets_name)):
                 {"role": "user", "content": "1 + 2 - 4 - 10"},
                 {"role": "assistant", "content": "[3, -1, -11]"},
                 {"role": "user", "content": input_text}]
-
+        
         input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors='pt').to(model.device)
         # input_text = tokenizer.decode(input_ids[0])
 
-        
-        # query =  create_query(eg, dataset_name, MODEL_TO_QUERY_TEMPLATE)
-        # query = "Given the JSON object below, extract and return only the value corresponding to the specified key. Return only the value and do not include any additional text in your response:"  # noqa
-        # model_path = 'models/dragon-plus-context-encoder'
-        # documents = processor.split_text_into_segments(input_text, max_segment_length=256)
-        # sorted_docs, sorted_scores = processor.rank_documents_by_similarity(query, documents, max_segment_length=256)
-        # torch.cuda.empty_cache()
-
-        # print("按照相似度排序的文档及对应分数:")
-        # for doc, score in zip(sorted_docs, sorted_scores):
-        #     print(f"{score:.4f} - {doc}")
-        # 遍历sorted_docs，检查eg["answer"]是否在每个文档中
-        # 初始化一个全为0的向量，长度和input_ids一致
-        # topk_vector = torch.zeros(input_ids.shape[1])
-
-        # # 计算前40%文档的数量
-        # num_docs_to_check = int(len(sorted_docs) * 0.05) # 30
-        # for i, doc in enumerate(sorted_docs[:num_docs_to_check]):  # 只遍历前40%的文档
-        #     start_char_index = input_text.find(doc)  # 找到文档在文本中的起始字符位置
-        #     if start_char_index == -1:
-        #         continue  # 如果没有找到，跳过这个文档
-
-        #     # 找到文档的结束字符位置
-        #     end_char_index = start_char_index + len(doc)
-
-        #     # 找到文档对应的起始和结束token索引
-        #     start_token_index = len(tokenizer.encode(input_text[:start_char_index], add_special_tokens=False))
-        #     end_token_index = len(tokenizer.encode(input_text[:end_char_index], add_special_tokens=False))
-
-        #     # 将对应位置的向量标记为1
-        #     topk_vector[start_token_index:end_token_index] = 1
-        
-        # query = query[0:int(len(query)/2)]
-        # query_start_char_index = input_text.find(query)
-        # if query_start_char_index != -1:
-        #     query_start_token_index = len(tokenizer.encode(input_text[:query_start_char_index], add_special_tokens=False))
-        #     # query_end_token_index = len(tokenizer.encode(input_text[:query_end_char_index], add_special_tokens=False))
-            
-        #     # 将对应的向量区域设置为0
-        #     topk_vector[query_start_token_index:] = 0
-        # torch.save(topk_vector, 'topk_vector.pt')
-
-        # found = False
-        # for i, doc in enumerate(sorted_docs):
-        #     if eg["answer"] in doc:
-        #         # 计算位置在总位置中的百分比
-        #         # print(f"eg['answer'] found in sorted_docs[{i}]")
-        #         position_percentage = (i + 1) / len(sorted_docs) * 100
-        #         positions_percentages.append(position_percentage)
-        #         found = True
-        #         break
-
-        # if not found:
-        #     # 如果没有找到，位置记为100%
-        #     # print(f"eg['answer'] not found in sorted_docs[{i}]")
-        #     positions_percentages.append(100.0)
-
-        # # 计算平均百分比
-        # average_percentage = sum(positions_percentages) / len(positions_percentages)
-        # print(f"所有位置[{positions_percentages}%]")
-        # print(f"平均百分比[{average_percentage}]")
-        
-        # continue
+    
 
         # Assuming generate is a function defined elsewhere
-        pred = generate(model, tokenizer, input_ids, temperature=0.01, top_p=0.95, max_new_tokens=max_new_tokens)
+        pred = generate(ds_engine, tokenizer, input_ids, temperature=0.01, top_p=0.95, max_new_tokens=max_new_tokens)
+        
 
         if dataset_name == "kv_retrieval":
             preds.append(
@@ -387,7 +397,7 @@ for i in range(len(datasets_name)):
                 "prediction": pred,
                 "ground_truth": get_answer(eg, dataset_name),
             })
-        dump_jsonl(preds, output_path)
+        # dump_jsonl(preds, output_path)
         torch.cuda.empty_cache()
 
 
